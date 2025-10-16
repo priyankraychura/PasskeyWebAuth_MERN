@@ -1,10 +1,12 @@
-// App.jsx
 import React, { useState } from 'react';
 import axios from 'axios';
 import { startRegistration, startAuthentication } from '@simplewebauthn/browser';
 
+// Configure axios with production backend URL
 const api = axios.create({
-    baseURL: 'https://passkeywebauth-mern-backend.onrender.com',
+    baseURL: typeof window !== 'undefined' && window.location.hostname.includes('localhost')
+        ? 'http://localhost:4000'
+        : 'https://passkeywebauth-mern-backend.onrender.com',
 });
 
 function App() {
@@ -33,14 +35,22 @@ function App() {
             const optionsRes = await api.post('/api/register/options', { username });
             const options = optionsRes.data;
 
+            console.log('[FRONTEND] Registration options:', {
+                challenge: options.challenge ? 'present' : 'missing',
+                userVerification: options.userVerification,
+                authenticatorAttachment: options.authenticatorSelection?.authenticatorAttachment
+            });
+
             showMessage('Please authenticate with your device...', 'info');
 
-            // Step 2: Use browser WebAuthn API to create credential
+            // Step 2: Create credential
             const credential = await startRegistration(options);
+
+            console.log('[FRONTEND] Registration credential obtained');
 
             showMessage('Verifying registration...', 'info');
 
-            // Step 3: Send credential to server for verification
+            // Step 3: Verify with server
             const verifyRes = await api.post('/api/register/verify', {
                 username,
                 credential
@@ -48,11 +58,20 @@ function App() {
 
             if (verifyRes.data.verified) {
                 showMessage(verifyRes.data.message, 'success');
+                setUsername('');
             } else {
                 throw new Error('Registration not verified');
             }
         } catch (error) {
             console.error('Registration error:', error);
+            if (error.name === 'NotAllowedError') {
+                showMessage('Registration cancelled by user or browser', 'error');
+                return;
+            }
+            if (error.name === 'InvalidStateError') {
+                showMessage('Invalid WebAuthn state. Please refresh and try again.', 'error');
+                return;
+            }
             const errorMsg = error.response?.data?.error || error.message || 'Registration failed';
             showMessage(`Registration failed: ${errorMsg}`, 'error');
         } finally {
@@ -65,18 +84,34 @@ function App() {
         showMessage('Initializing login...', 'info');
 
         try {
-            // Step 1: Get authentication options from server
+            // Step 1: Get authentication options
             const optionsRes = await api.post('/api/login/options');
             const options = optionsRes.data;
 
-            showMessage('Please authenticate with your device...', 'info');
+            // Clean options to prevent warning
+            const cleanOptions = {
+                ...options,
+                mediation: undefined,
+                allowCredentials: undefined
+            };
 
-            // Step 2: Use browser WebAuthn API to get credential
-            const credential = await startAuthentication(options);
+            console.log('[FRONTEND] Clean login options:', {
+                challenge: cleanOptions.challenge ? 'present' : 'missing',
+                userVerification: cleanOptions.userVerification,
+                allowCredentials: cleanOptions.allowCredentials ? 'present' : 'none (discoverable)',
+                mediation: cleanOptions.mediation || 'not set'
+            });
+
+            showMessage('Please authenticate with your passkey...', 'info');
+
+            // Step 2: Get credential
+            const credential = await startAuthentication(cleanOptions);
+
+            console.log('[FRONTEND] Authentication credential obtained');
 
             showMessage('Verifying login...', 'info');
 
-            // Step 3: Send credential to server for verification
+            // Step 3: Verify with server
             const verifyRes = await api.post('/api/login/verify', {
                 credential
             });
@@ -90,6 +125,18 @@ function App() {
             }
         } catch (error) {
             console.error('Login error:', error);
+            if (error.name === 'NotAllowedError') {
+                showMessage('Login cancelled by user or browser', 'error');
+                return;
+            }
+            if (error.name === 'SecurityError') {
+                showMessage('Security error. Try in a secure context (HTTPS) or different browser.', 'error');
+                return;
+            }
+            if (error.name === 'InvalidStateError') {
+                showMessage('Invalid WebAuthn state. Please refresh and try again.', 'error');
+                return;
+            }
             const errorMsg = error.response?.data?.error || error.message || 'Login failed';
             showMessage(`Login failed: ${errorMsg}`, 'error');
         } finally {
@@ -100,7 +147,19 @@ function App() {
     const handleLogout = () => {
         setIsLoggedIn(false);
         setUsername('');
+        setMessage('');
         showMessage('Logged out successfully', 'info');
+    };
+
+    const clearStoredCredentials = async () => {
+        try {
+            showMessage('Clearing stored credentials...', 'info');
+            setIsLoggedIn(false);
+            setUsername('');
+            showMessage('Stored credentials cleared. Please register again.', 'success');
+        } catch (error) {
+            showMessage('Failed to clear credentials', 'error');
+        }
     };
 
     const getMessageStyle = () => {
@@ -163,7 +222,7 @@ function App() {
                                     disabled={isLoading || !username.trim()}
                                     className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg shadow-md hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-indigo-600"
                                 >
-                                    {isLoading ? 'Processing...' : 'Register New Passkey'}
+                                    {isLoading && username.trim() ? 'Processing...' : 'Register New Passkey'}
                                 </button>
 
                                 <div className="relative">
@@ -180,9 +239,17 @@ function App() {
                                     disabled={isLoading}
                                     className="w-full py-3 px-4 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg shadow-md hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-green-600"
                                 >
-                                    {isLoading ? 'Processing...' : 'Login with Passkey'}
+                                    {isLoading && !username.trim() ? 'Processing...' : 'Login with Passkey'}
                                 </button>
                             </div>
+
+                            {/* Debug/Clear Button */}
+                            <button
+                                onClick={clearStoredCredentials}
+                                className="w-full py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium rounded-lg text-xs transition-all duration-200"
+                            >
+                                Clear Stored Credentials (Debug)
+                            </button>
                         </div>
                     ) : (
                         <div className="space-y-4">
