@@ -4,7 +4,7 @@ import axios from 'axios';
 import { startRegistration, startAuthentication } from '@simplewebauthn/browser';
 
 const api = axios.create({
-    baseURL: 'http://localhost:4000',
+    baseURL: 'https://passkeywebauth-mern-backend.onrender.com',
 });
 
 function App() {
